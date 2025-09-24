@@ -4,14 +4,17 @@ A Node.js application that continuously monitors court availability on AlquilaTu
 
 ## Features
 
-- 🎾 Continuously monitors court availability for the current day
+- 🎾 Monitors court availability for the current day
+- 🌅 Automatically transitions to new day when date changes
 - ⏰ Filters slots between 16:30 and 20:00 (configurable)
 - 📱 Sends Telegram notifications for each available slot
-- 🔄 Checks every minute (configurable interval)
+- 🔄 Supports both continuous monitoring and serverless execution
 - 🚫 Prevents duplicate notifications for same slots
 - 🛡️ Robust error handling and logging
 - ⚙️ Configurable time ranges and check intervals
 - 🛑 Graceful shutdown handling
+- ☁️ Vercel serverless deployment ready
+- 🔧 Manual trigger endpoint for testing
 
 ## Setup
 
@@ -116,11 +119,84 @@ No hay turnos disponibles entre 16:30 y 20:00 para hoy.
 🛑 Court availability monitoring stopped.
 ```
 
-## Process Management
+## Deployment Options
 
-Since the application now runs continuously, you may want to use a process manager to ensure it stays running:
+### Vercel Deployment (Recommended for Serverless)
 
-### PM2 (Recommended)
+The application is configured to run as Vercel serverless functions with automatic cron scheduling.
+
+#### Setup on Vercel:
+
+1. **Connect your repository to Vercel:**
+   ```bash
+   # Install Vercel CLI
+   npm i -g vercel
+   
+   # Deploy
+   vercel
+   ```
+
+2. **Configure Environment Variables in Vercel Dashboard:**
+   
+   Go to your Vercel project dashboard → Settings → Environment Variables and add:
+   
+   | Variable | Value | Required |
+   |----------|-------|----------|
+   | `TELEGRAM_BOT_TOKEN` | Your bot token from @BotFather | ✅ Yes |
+   | `TELEGRAM_CHAT_ID` | Your chat ID number | ✅ Yes |
+   | `START_TIME` | Start time (e.g., "16:30") | ❌ No (default: 16:30) |
+   | `END_TIME` | End time (e.g., "20:00") | ❌ No (default: 20:00) |
+   
+   > **Note:** `INTERVAL_MINUTES` is not needed for Vercel as cron scheduling is handled by `vercel.json`
+
+3. **Automatic Scheduling:**
+   - The cron job runs every minute automatically
+   - No need for external process managers
+   - Scales to zero when not running
+
+#### Available API Endpoints:
+
+**Automatic Cron Job:**
+- `/api/check-availability` - Runs every minute automatically via Vercel cron
+
+**Manual Testing:**
+- `/api/manual-check` - Trigger a manual check and get detailed response
+- Returns execution time, slot count, and comprehensive status
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "date": "2024-09-24",
+  "timeRange": "16:30 - 20:00",
+  "slotsCount": 3,
+  "newSlotsCount": 1,
+  "notifications": ["🎾 Turno disponible a las 17:00hs en cancha Cancha 1"],
+  "executionTime": {
+    "start": "2024-09-24T14:30:00.000Z",
+    "end": "2024-09-24T14:30:02.500Z",
+    "duration": "2500ms"
+  },
+  "trigger": "manual"
+}
+```
+
+#### Advantages:
+- ✅ No server maintenance required
+- ✅ Automatic scaling
+- ✅ Built-in monitoring and logs
+- ✅ Free tier available
+- ✅ Global edge deployment
+
+#### Limitations:
+- ⚠️ **Duplicate Notifications**: Since serverless functions are stateless, the bot cannot remember previously notified slots. This means it will notify about the same available slot every minute until it's booked.
+- 🔧 **Solution**: For production use, consider adding Vercel KV or a database to store notified slots state.
+
+### Traditional Server Deployment
+
+For continuous monitoring on your own server:
+
+#### PM2 (Process Manager)
 
 ```bash
 # Install PM2 globally
@@ -145,7 +221,7 @@ pm2 stop court-checker
 pm2 restart court-checker
 ```
 
-### systemd (Linux)
+#### systemd (Linux)
 
 Create a service file `/etc/systemd/system/court-checker.service`:
 
