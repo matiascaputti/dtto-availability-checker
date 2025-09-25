@@ -13,36 +13,62 @@ class CourtAvailabilityChecker {
     this.intervalMinutes = parseInt(process.env.INTERVAL_MINUTES) || 1;
     this.notifiedSlots = new Set(); // Track already notified slots
     this.intervalId = null;
-    this.currentMonitoringDate = this.getCurrentDate(); // Track current monitoring date
+    this.heartbeatIntervalId = null; // For hourly heartbeat
+    this.timezone = "America/Argentina/Buenos_Aires"; // GMT-3
+    this.currentMonitoringDate = this.getNextDate(); // Track current monitoring date (next day)
+    this.lastNewDayCheck = this.getCurrentTimeInTimezone().toDateString(); // Track when we last checked for new day
   }
 
   /**
-   * Get current date in YYYY-MM-DD format
+   * Get current time in the specified timezone
+   */
+  getCurrentTimeInTimezone() {
+    return new Date(
+      new Date().toLocaleString("en-US", { timeZone: this.timezone })
+    );
+  }
+
+  /**
+   * Get current date in YYYY-MM-DD format in timezone
    */
   getCurrentDate() {
-    const today = new Date();
+    const today = this.getCurrentTimeInTimezone();
     return today.toISOString().split("T")[0];
   }
 
   /**
-   * Check if the day has changed and handle the transition
+   * Get next day date in YYYY-MM-DD format in timezone
+   */
+  getNextDate() {
+    const today = this.getCurrentTimeInTimezone();
+    const nextDay = new Date(today);
+    nextDay.setDate(today.getDate() + 1);
+    return nextDay.toISOString().split("T")[0];
+  }
+
+  /**
+   * Check if a new day has started (00:00 in timezone) and handle the transition
    */
   async handleDayChange() {
-    const currentDate = this.getCurrentDate();
+    const currentTimeInTz = this.getCurrentTimeInTimezone();
+    const currentDateString = currentTimeInTz.toDateString();
 
-    if (currentDate !== this.currentMonitoringDate) {
+    // Check if we've moved to a new day (00:00 has passed)
+    if (currentDateString !== this.lastNewDayCheck) {
+      const newMonitoringDate = this.getNextDate();
+
       console.log(
-        `Day changed from ${this.currentMonitoringDate} to ${currentDate}`
+        `Day changed from monitoring ${this.currentMonitoringDate} to ${newMonitoringDate}`
       );
 
-      // Update monitoring date
-      this.currentMonitoringDate = currentDate;
+      this.currentMonitoringDate = newMonitoringDate;
+      this.lastNewDayCheck = currentDateString;
 
       // Reset notified slots for the new day
       this.notifiedSlots.clear();
 
       // Send notification about new day monitoring
-      const newDayMessage = `🌅 New day started! Now monitoring court availability for ${currentDate}`;
+      const newDayMessage = `🌅 New day started! Now monitoring court availability for ${newMonitoringDate} (tomorrow)`;
       try {
         await this.sendTelegramMessage(newDayMessage);
       } catch (error) {
@@ -79,8 +105,8 @@ class CourtAvailabilityChecker {
    */
   async fetchAvailability() {
     try {
-      const currentDate = this.getCurrentDate();
-      const url = `${this.apiUrl}?date=${currentDate}`;
+      // Use the monitoring date (which is the next day)
+      const url = `${this.apiUrl}?date=${this.currentMonitoringDate}`;
       const response = await axios.get(url);
       return response.data;
     } catch (error) {
@@ -177,7 +203,7 @@ class CourtAvailabilityChecker {
 
     if (availableSlots.length === 0) {
       if (isFirstRun) {
-        const message = `No hay turnos disponibles entre ${this.startTime} y ${this.endTime} para hoy.`;
+        const message = `No hay turnos disponibles entre ${this.startTime} y ${this.endTime} para mañana (${this.currentMonitoringDate}).`;
         await this.sendTelegramMessage(message);
       }
       return;
@@ -191,7 +217,7 @@ class CourtAvailabilityChecker {
     // Send individual messages for each new available slot
     for (const slot of newSlots) {
       const slotId = this.getSlotId(slot);
-      const message = `Turno disponible a las ${slot.time}hs en cancha ${slot.court}`;
+      const message = `🎾 Turno disponible mañana (${this.currentMonitoringDate}) a las ${slot.time}hs en cancha ${slot.court}`;
       await this.sendTelegramMessage(message);
 
       // Mark slot as notified
@@ -255,12 +281,33 @@ class CourtAvailabilityChecker {
   }
 
   /**
+   * Send hourly heartbeat message
+   */
+  async sendHeartbeat() {
+    try {
+      const currentTime = this.getCurrentTimeInTimezone();
+      const timeString = currentTime.toLocaleTimeString("es-AR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: this.timezone,
+      });
+      const heartbeatMessage = `💓 Bot is running - ${timeString} GMT-3 | Monitoring: ${this.currentMonitoringDate}`;
+      await this.sendTelegramMessage(heartbeatMessage);
+      console.log(`Heartbeat sent at ${timeString}`);
+    } catch (error) {
+      console.error("Failed to send heartbeat:", error.message);
+    }
+  }
+
+  /**
    * Start continuous monitoring
    */
   async startMonitoring() {
     console.log("Starting continuous court availability monitoring...");
     console.log(`Time range: ${this.startTime} - ${this.endTime}`);
     console.log(`Check interval: ${this.intervalMinutes} minute(s)`);
+    console.log(`Monitoring date: ${this.currentMonitoringDate} (tomorrow)`);
+    console.log(`Timezone: ${this.timezone}`);
 
     // Validate environment variables
     if (!process.env.TELEGRAM_BOT_TOKEN) {
@@ -272,7 +319,7 @@ class CourtAvailabilityChecker {
     }
 
     // Send startup notification
-    const startupMessage = `🚀 Court availability monitoring started!\n⏰ Checking every ${this.intervalMinutes} minute(s) between ${this.startTime} and ${this.endTime}`;
+    const startupMessage = `🚀 Court availability monitoring started!\n⏰ Checking every ${this.intervalMinutes} minute(s) between ${this.startTime} and ${this.endTime}\n📅 Monitoring for: ${this.currentMonitoringDate} (tomorrow)\n🌍 Timezone: GMT-3`;
     await this.sendTelegramMessage(startupMessage);
 
     // Perform initial check
@@ -282,6 +329,14 @@ class CourtAvailabilityChecker {
     this.intervalId = setInterval(async () => {
       await this.checkAvailability(false);
     }, this.intervalMinutes * 60 * 1000);
+
+    // Set up hourly heartbeat (every 60 minutes)
+    this.heartbeatIntervalId = setInterval(async () => {
+      await this.sendHeartbeat();
+    }, 60 * 60 * 1000); // 1 hour in milliseconds
+
+    // Send initial heartbeat
+    await this.sendHeartbeat();
   }
 
   /**
@@ -292,13 +347,19 @@ class CourtAvailabilityChecker {
       clearInterval(this.intervalId);
       this.intervalId = null;
       console.log("Monitoring stopped");
+    }
 
-      try {
-        const stopMessage = "🛑 Court availability monitoring stopped.";
-        await this.sendTelegramMessage(stopMessage);
-      } catch (error) {
-        console.error("Failed to send stop notification:", error.message);
-      }
+    if (this.heartbeatIntervalId) {
+      clearInterval(this.heartbeatIntervalId);
+      this.heartbeatIntervalId = null;
+      console.log("Heartbeat stopped");
+    }
+
+    try {
+      const stopMessage = "🛑 Court availability monitoring stopped.";
+      await this.sendTelegramMessage(stopMessage);
+    } catch (error) {
+      console.error("Failed to send stop notification:", error.message);
     }
   }
 
