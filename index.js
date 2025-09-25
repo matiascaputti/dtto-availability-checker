@@ -13,7 +13,6 @@ class CourtAvailabilityChecker {
     this.intervalMinutes = parseInt(process.env.INTERVAL_MINUTES) || 1;
     this.notifiedSlots = new Set(); // Track already notified slots
     this.intervalId = null;
-    this.heartbeatIntervalId = null; // For hourly heartbeat
     this.timezone = "America/Argentina/Buenos_Aires"; // GMT-3
     this.currentMonitoringDate = this.getNextDate(); // Track current monitoring date (next day)
     this.lastNewDayCheck = this.getCurrentTimeInTimezone().toDateString(); // Track when we last checked for new day
@@ -275,24 +274,6 @@ class CourtAvailabilityChecker {
   }
 
   /**
-   * Send hourly heartbeat message
-   */
-  async sendHeartbeat() {
-    try {
-      const currentTime = this.getCurrentTimeInTimezone();
-      const timeString = currentTime.toLocaleTimeString("es-AR", {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-      const heartbeatMessage = `💓 Bot is running - ${timeString} GMT-3 | Monitoring: ${this.currentMonitoringDate}`;
-      await this.sendTelegramMessage(heartbeatMessage);
-      console.log(`Heartbeat sent at ${timeString}`);
-    } catch (error) {
-      console.error("Failed to send heartbeat:", error.message);
-    }
-  }
-
-  /**
    * Start continuous monitoring
    */
   async startMonitoring() {
@@ -322,14 +303,6 @@ class CourtAvailabilityChecker {
     this.intervalId = setInterval(async () => {
       await this.checkAvailability(false);
     }, this.intervalMinutes * 60 * 1000);
-
-    // Set up hourly heartbeat (every 60 minutes)
-    this.heartbeatIntervalId = setInterval(async () => {
-      await this.sendHeartbeat();
-    }, 60 * 60 * 1000); // 1 hour in milliseconds
-
-    // Send initial heartbeat
-    await this.sendHeartbeat();
   }
 
   /**
@@ -340,12 +313,6 @@ class CourtAvailabilityChecker {
       clearInterval(this.intervalId);
       this.intervalId = null;
       console.log("Monitoring stopped");
-    }
-
-    if (this.heartbeatIntervalId) {
-      clearInterval(this.heartbeatIntervalId);
-      this.heartbeatIntervalId = null;
-      console.log("Heartbeat stopped");
     }
 
     try {
