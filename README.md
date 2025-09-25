@@ -70,12 +70,6 @@ INTERVAL_MINUTES=1
 npm start
 ```
 
-### Run with Node
-
-```bash
-node index.js
-```
-
 ### Development with Auto-Restart
 
 ```bash

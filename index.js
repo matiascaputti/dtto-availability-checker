@@ -20,16 +20,16 @@ class CourtAvailabilityChecker {
   }
 
   /**
-   * Get current time in the specified timezone
+   * Get current time in Argentina timezone (GMT-3)
    */
   getCurrentTimeInTimezone() {
-    return new Date(
-      new Date().toLocaleString("en-US", { timeZone: this.timezone })
-    );
+    const now = new Date();
+    // Convert to Argentina timezone by creating a new date with timezone offset
+    return new Date(now.toLocaleString("en-US", { timeZone: this.timezone }));
   }
 
   /**
-   * Get current date in YYYY-MM-DD format in timezone
+   * Get current date in YYYY-MM-DD format in Argentina timezone
    */
   getCurrentDate() {
     const today = this.getCurrentTimeInTimezone();
@@ -37,7 +37,7 @@ class CourtAvailabilityChecker {
   }
 
   /**
-   * Get next day date in YYYY-MM-DD format in timezone
+   * Get next day date in YYYY-MM-DD format in Argentina timezone
    */
   getNextDate() {
     const today = this.getCurrentTimeInTimezone();
@@ -250,17 +250,11 @@ class CourtAvailabilityChecker {
         }
       }
 
-      const currentTime = new Date().toLocaleTimeString();
-      // console.log(`[${currentTime}] Checking court availability...`);
-
       // Fetch availability data
       const data = await this.fetchAvailability();
 
       // Filter available slots
       const availableSlots = this.filterAvailableSlots(data);
-      // console.log(
-      //   `Found ${availableSlots.length} available slots in time range`
-      // );
 
       // Send notifications
       await this.sendNotifications(availableSlots, isFirstRun);
@@ -289,7 +283,6 @@ class CourtAvailabilityChecker {
       const timeString = currentTime.toLocaleTimeString("es-AR", {
         hour: "2-digit",
         minute: "2-digit",
-        timeZone: this.timezone,
       });
       const heartbeatMessage = `💓 Bot is running - ${timeString} GMT-3 | Monitoring: ${this.currentMonitoringDate}`;
       await this.sendTelegramMessage(heartbeatMessage);
