@@ -11,10 +11,11 @@ class CourtAvailabilityChecker {
     this.startTime = process.env.START_TIME || "16:30";
     this.endTime = process.env.END_TIME || "20:00";
     this.intervalMinutes = parseInt(process.env.INTERVAL_MINUTES) || 1;
+    this.shiftDays = parseInt(process.env.SHIFT_DAYS) || 0;
     this.notifiedSlots = new Set(); // Track already notified slots
     this.intervalId = null;
     this.timezone = "America/Argentina/Buenos_Aires"; // GMT-3
-    this.currentMonitoringDate = this.getNextDate(); // Track current monitoring date (next day)
+    this.currentMonitoringDate = this.getTargetDate(); // Track current monitoring date
     this.lastNewDayCheck = this.getCurrentTimeInTimezone().toDateString(); // Track when we last checked for new day
   }
 
@@ -23,26 +24,35 @@ class CourtAvailabilityChecker {
    */
   getCurrentTimeInTimezone() {
     const now = new Date();
-    // Convert to Argentina timezone by creating a new date with timezone offset
     return new Date(now.toLocaleString("en-US", { timeZone: this.timezone }));
   }
 
   /**
-   * Get current date in YYYY-MM-DD format in Argentina timezone
+   * Get target date based on SHIFT_DAYS in YYYY-MM-DD format in Argentina timezone
    */
-  getCurrentDate() {
+  getTargetDate() {
     const today = this.getCurrentTimeInTimezone();
-    return today.toISOString().split("T")[0];
+    const targetDay = new Date(today);
+    targetDay.setDate(today.getDate() + this.shiftDays);
+    return targetDay.toISOString().split("T")[0];
   }
 
   /**
-   * Get next day date in YYYY-MM-DD format in Argentina timezone
+   * Get human-readable description of the target day
    */
-  getNextDate() {
-    const today = this.getCurrentTimeInTimezone();
-    const nextDay = new Date(today);
-    nextDay.setDate(today.getDate() + 1);
-    return nextDay.toISOString().split("T")[0];
+  getTargetDayDescription() {
+    switch (this.shiftDays) {
+      case 0:
+        return "hoy";
+      case 1:
+        return "mañana";
+      case 2:
+        return "pasado mañana";
+      default:
+        return this.shiftDays > 0
+          ? `en ${this.shiftDays} días`
+          : `hace ${Math.abs(this.shiftDays)} días`;
+    }
   }
 
   /**
@@ -54,7 +64,7 @@ class CourtAvailabilityChecker {
 
     // Check if we've moved to a new day (00:00 has passed)
     if (currentDateString !== this.lastNewDayCheck) {
-      const newMonitoringDate = this.getNextDate();
+      const newMonitoringDate = this.getTargetDate();
 
       console.log(
         `Day changed from monitoring ${this.currentMonitoringDate} to ${newMonitoringDate}`
@@ -67,7 +77,8 @@ class CourtAvailabilityChecker {
       this.notifiedSlots.clear();
 
       // Send notification about new day monitoring
-      const newDayMessage = `🌅 New day started! Now monitoring court availability for ${newMonitoringDate} (tomorrow)`;
+      const targetDayDescription = this.getTargetDayDescription();
+      const newDayMessage = `🌅 New day started! Now monitoring court availability for ${newMonitoringDate} (${targetDayDescription})`;
       try {
         await this.sendTelegramMessage(newDayMessage);
       } catch (error) {
@@ -120,48 +131,44 @@ class CourtAvailabilityChecker {
   filterAvailableSlots(data) {
     const availableSlots = [];
 
-    // The API response structure may vary, so we'll handle common formats
-    let courts = [];
-
-    if (data.courts) {
-      courts = data.courts;
-    } else if (data.data && data.data.courts) {
-      courts = data.data.courts;
-    } else if (Array.isArray(data)) {
-      courts = data;
-    } else if (data.availability) {
-      courts = data.availability;
+    // Check if we have the correct API response structure
+    if (!data.available_courts || !Array.isArray(data.available_courts)) {
+      console.error(
+        "Invalid API response structure - missing available_courts"
+      );
+      return availableSlots;
     }
 
-    courts.forEach((court) => {
-      const courtName =
-        court.name || court.court_name || court.title || `Court ${court.id}`;
+    data.available_courts.forEach((court) => {
+      const courtName = court.name || `Court ${court.id}`;
 
-      // Look for slots in various possible structures
-      let slots = court.slots || court.availability || court.times || [];
-
-      if (court.schedule) {
-        slots = court.schedule;
+      if (!court.available_slots || !Array.isArray(court.available_slots)) {
+        return;
       }
 
-      slots.forEach((slot) => {
-        // Check if slot is available
-        const isAvailable =
-          slot.available === true ||
-          slot.status === "available" ||
-          slot.state === "available" ||
-          !slot.occupied ||
-          !slot.booked;
+      court.available_slots.forEach((slot) => {
+        const startDateTime = slot.start;
 
-        if (isAvailable) {
-          const startTime = slot.start || slot.time || slot.start_time;
+        if (startDateTime) {
+          const timeMatch = startDateTime.match(/T(\d{2}:\d{2})/);
+          if (timeMatch) {
+            const timeOnly = timeMatch[1];
 
-          if (startTime && this.isTimeInRange(startTime)) {
-            availableSlots.push({
-              court: courtName,
-              time: startTime,
-              slot: slot,
-            });
+            if (this.isTimeInRange(timeOnly)) {
+              const priceFormatted = slot.price
+                ? `$${(slot.price.cents / 100).toLocaleString("es-AR")}`
+                : "Price not available";
+
+              availableSlots.push({
+                court: courtName,
+                time: timeOnly,
+                fullDateTime: startDateTime,
+                duration: slot.duration,
+                price: priceFormatted,
+                priceRaw: slot.price,
+                slot: slot,
+              });
+            }
           }
         }
       });
@@ -202,7 +209,8 @@ class CourtAvailabilityChecker {
 
     if (availableSlots.length === 0) {
       if (isFirstRun) {
-        const message = `No hay turnos disponibles entre ${this.startTime} y ${this.endTime} para mañana (${this.currentMonitoringDate}).`;
+        const targetDayDescription = this.getTargetDayDescription();
+        const message = `No hay turnos disponibles entre ${this.startTime} y ${this.endTime} para ${targetDayDescription} (${this.currentMonitoringDate}).`;
         await this.sendTelegramMessage(message);
       }
       return;
@@ -216,7 +224,11 @@ class CourtAvailabilityChecker {
     // Send individual messages for each new available slot
     for (const slot of newSlots) {
       const slotId = this.getSlotId(slot);
-      const message = `🎾 Turno disponible mañana (${this.currentMonitoringDate}) a las ${slot.time}hs en cancha ${slot.court}`;
+      const durationText = slot.duration
+        ? `${slot.duration} minutos`
+        : "90 minutos";
+      const targetDayDescription = this.getTargetDayDescription();
+      const message = `🎾 Turno disponible ${targetDayDescription} (${this.currentMonitoringDate}) a las ${slot.time}hs en ${slot.court}\n💰 Precio: ${slot.price}\n⏱️ Duración: ${durationText}`;
       await this.sendTelegramMessage(message);
 
       // Mark slot as notified
@@ -277,11 +289,12 @@ class CourtAvailabilityChecker {
    * Start continuous monitoring
    */
   async startMonitoring() {
-    console.log("Starting continuous court availability monitoring...");
-    console.log(`Time range: ${this.startTime} - ${this.endTime}`);
-    console.log(`Check interval: ${this.intervalMinutes} minute(s)`);
-    console.log(`Monitoring date: ${this.currentMonitoringDate} (tomorrow)`);
-    console.log(`Timezone: ${this.timezone}`);
+    const startupMessage = `🚀 Starting court availability monitoring
+📅 Target: ${this.currentMonitoringDate} (${this.getTargetDayDescription()})
+⏰ Time: ${this.startTime}-${this.endTime} | Check every ${
+      this.intervalMinutes
+    }min`;
+    console.log(startupMessage);
 
     // Validate environment variables
     if (!process.env.TELEGRAM_BOT_TOKEN) {
@@ -293,7 +306,6 @@ class CourtAvailabilityChecker {
     }
 
     // Send startup notification
-    const startupMessage = `🚀 Court availability monitoring started!\n⏰ Checking every ${this.intervalMinutes} minute(s) between ${this.startTime} and ${this.endTime}\n📅 Monitoring for: ${this.currentMonitoringDate} (tomorrow)\n🌍 Timezone: GMT-3`;
     await this.sendTelegramMessage(startupMessage);
 
     // Perform initial check
