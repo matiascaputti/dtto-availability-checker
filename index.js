@@ -38,10 +38,20 @@ class CourtAvailabilityChecker {
   }
 
   /**
-   * Get human-readable description of the target day
+   * Get next day after target date in YYYY-MM-DD format in Argentina timezone
    */
-  getTargetDayDescription() {
-    switch (this.shiftDays) {
+  getNextDayDate() {
+    const today = this.getCurrentTimeInTimezone();
+    const nextDay = new Date(today);
+    nextDay.setDate(today.getDate() + this.shiftDays + 1);
+    return nextDay.toISOString().split("T")[0];
+  }
+
+  /**
+   * Get human-readable description for a day based on shift from today
+   */
+  getDayDescription(shiftDays) {
+    switch (shiftDays) {
       case 0:
         return "hoy";
       case 1:
@@ -49,9 +59,9 @@ class CourtAvailabilityChecker {
       case 2:
         return "pasado mañana";
       default:
-        return this.shiftDays > 0
-          ? `en ${this.shiftDays} días`
-          : `hace ${Math.abs(this.shiftDays)} días`;
+        return shiftDays > 0
+          ? `en ${shiftDays} días`
+          : `hace ${Math.abs(shiftDays)} días`;
     }
   }
 
@@ -77,7 +87,7 @@ class CourtAvailabilityChecker {
       this.notifiedSlots.clear();
 
       // Send notification about new day monitoring
-      const targetDayDescription = this.getTargetDayDescription();
+      const targetDayDescription = this.getDayDescription(this.shiftDays);
       const newDayMessage = `🌅 New day started! Now monitoring court availability for ${newMonitoringDate} (${targetDayDescription})`;
       try {
         await this.sendTelegramMessage(newDayMessage);
@@ -111,14 +121,36 @@ class CourtAvailabilityChecker {
   }
 
   /**
-   * Fetch availability data from the API
+   * Fetch availability data from the API for a specific date
+   */
+  async fetchAvailabilityForDate(date) {
+    try {
+      const url = `${this.apiUrl}?date=${date}`;
+      const response = await axios.get(url);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching availability for ${date}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Fetch availability data for both target day and next day
    */
   async fetchAvailability() {
     try {
-      // Use the monitoring date (which is the next day)
-      const url = `${this.apiUrl}?date=${this.currentMonitoringDate}`;
-      const response = await axios.get(url);
-      return response.data;
+      const targetDate = this.currentMonitoringDate;
+      const nextDate = this.getNextDayDate();
+
+      const [targetData, nextData] = await Promise.all([
+        this.fetchAvailabilityForDate(targetDate),
+        this.fetchAvailabilityForDate(nextDate),
+      ]);
+
+      return {
+        targetDay: { date: targetDate, data: targetData },
+        nextDay: { date: nextDate, data: nextData },
+      };
     } catch (error) {
       console.error("Error fetching availability:", error.message);
       throw error;
@@ -128,13 +160,13 @@ class CourtAvailabilityChecker {
   /**
    * Filter available slots within the time range for each court
    */
-  filterAvailableSlots(data) {
+  filterAvailableSlots(data, date, dayDescription) {
     const availableSlots = [];
 
     // Check if we have the correct API response structure
     if (!data.available_courts || !Array.isArray(data.available_courts)) {
       console.error(
-        "Invalid API response structure - missing available_courts"
+        `Invalid API response structure for ${date} - missing available_courts`
       );
       return availableSlots;
     }
@@ -166,6 +198,8 @@ class CourtAvailabilityChecker {
                 duration: slot.duration,
                 price: priceFormatted,
                 priceRaw: slot.price,
+                date: date,
+                dayDescription: dayDescription,
                 slot: slot,
               });
             }
@@ -175,6 +209,25 @@ class CourtAvailabilityChecker {
     });
 
     return availableSlots;
+  }
+
+  /**
+   * Process availability data for both days
+   */
+  processAvailabilityData(availabilityData) {
+    const targetSlots = this.filterAvailableSlots(
+      availabilityData.targetDay.data,
+      availabilityData.targetDay.date,
+      this.getDayDescription(this.shiftDays)
+    );
+
+    const nextSlots = this.filterAvailableSlots(
+      availabilityData.nextDay.data,
+      availabilityData.nextDay.date,
+      this.getDayDescription(this.shiftDays + 1)
+    );
+
+    return [...targetSlots, ...nextSlots];
   }
 
   /**
@@ -193,7 +246,7 @@ class CourtAvailabilityChecker {
    * Create a unique identifier for a slot
    */
   getSlotId(slot) {
-    return `${slot.court}-${slot.time}`;
+    return `${slot.date}-${slot.court}-${slot.time}`;
   }
 
   /**
@@ -209,8 +262,10 @@ class CourtAvailabilityChecker {
 
     if (availableSlots.length === 0) {
       if (isFirstRun) {
-        const targetDayDescription = this.getTargetDayDescription();
-        const message = `No hay turnos disponibles entre ${this.startTime} y ${this.endTime} para ${targetDayDescription} (${this.currentMonitoringDate}).`;
+        const targetDayDescription = this.getDayDescription(this.shiftDays);
+        const nextDayDescription = this.getDayDescription(this.shiftDays + 1);
+        const nextDate = this.getNextDayDate();
+        const message = `No hay turnos disponibles entre ${this.startTime} y ${this.endTime} para:\n• ${targetDayDescription} (${this.currentMonitoringDate})\n• ${nextDayDescription} (${nextDate})`;
         await this.sendTelegramMessage(message);
       }
       return;
@@ -227,8 +282,7 @@ class CourtAvailabilityChecker {
       const durationText = slot.duration
         ? `${slot.duration} minutos`
         : "90 minutos";
-      const targetDayDescription = this.getTargetDayDescription();
-      const message = `🎾 Turno disponible ${targetDayDescription} (${this.currentMonitoringDate}) a las ${slot.time}hs en ${slot.court}\n💰 Precio: ${slot.price}\n⏱️ Duración: ${durationText}`;
+      const message = `🎾 Turno disponible ${slot.dayDescription} (${slot.date}) a las ${slot.time}hs en ${slot.court}\n💰 Precio: ${slot.price}\n⏱️ Duración: ${durationText}`;
       await this.sendTelegramMessage(message);
 
       // Mark slot as notified
@@ -261,11 +315,11 @@ class CourtAvailabilityChecker {
         }
       }
 
-      // Fetch availability data
-      const data = await this.fetchAvailability();
+      // Fetch availability data for both days
+      const availabilityData = await this.fetchAvailability();
 
-      // Filter available slots
-      const availableSlots = this.filterAvailableSlots(data);
+      // Process and filter available slots for both days
+      const availableSlots = this.processAvailabilityData(availabilityData);
 
       // Send notifications
       await this.sendNotifications(availableSlots, isFirstRun);
@@ -289,8 +343,11 @@ class CourtAvailabilityChecker {
    * Start continuous monitoring
    */
   async startMonitoring() {
+    const nextDate = this.getNextDayDate();
     const startupMessage = `🚀 Starting court availability monitoring
-📅 Target: ${this.currentMonitoringDate} (${this.getTargetDayDescription()})
+📅 Monitoring: ${this.currentMonitoringDate} (${this.getDayDescription(
+      this.shiftDays
+    )}) + ${nextDate} (${this.getDayDescription(this.shiftDays + 1)})
 ⏰ Time: ${this.startTime}-${this.endTime} | Check every ${
       this.intervalMinutes
     }min`;
@@ -306,7 +363,14 @@ class CourtAvailabilityChecker {
     }
 
     // Send startup notification
-    await this.sendTelegramMessage(startupMessage);
+    const telegramStartupMessage = `🚀 Court availability monitoring started!
+⏰ Checking every ${this.intervalMinutes} minute(s) between ${
+      this.startTime
+    } and ${this.endTime}
+📅 Monitoring both:
+• ${this.currentMonitoringDate} (${this.getDayDescription(this.shiftDays)})
+• ${nextDate} (${this.getDayDescription(this.shiftDays + 1)})`;
+    await this.sendTelegramMessage(telegramStartupMessage);
 
     // Perform initial check
     await this.checkAvailability(true);
