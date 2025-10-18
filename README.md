@@ -8,6 +8,8 @@ A Node.js application that continuously monitors court availability on AlquilaTu
 - 🌅 Automatically transitions to new day when date changes
 - ⏰ Filters slots between 16:30 and 20:00 (configurable)
 - 📱 Sends Telegram notifications for each available slot
+- 📅 One-click booking directly from Telegram notifications
+- 🤖 Telegram bot commands (`/slots`, `/book`)
 - 🔄 Checks every minute (configurable interval)
 - 🚫 Prevents duplicate notifications for same slots
 - 🛡️ Robust error handling and logging
@@ -60,7 +62,19 @@ END_TIME=20:00
 
 # Optional (defaults to 1 minute)
 INTERVAL_MINUTES=1
+
+# Required for booking feature
+BOOKING_NAME=Your Name
+BOOKING_EMAIL=your.email@example.com
+BOOKING_PHONE=+542211234567
+BOOKING_SPORT_ID=7  # Optional, defaults to 7
 ```
+
+## Booking
+
+Click the "📅 Reservar este turno" button on notifications, or use:
+- `/slots` - View available slots
+- `/book [number]` - Book a slot (e.g., `/book 1`)
 
 ## Usage
 

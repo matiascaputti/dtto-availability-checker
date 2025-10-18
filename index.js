@@ -1,22 +1,117 @@
 const axios = require("axios");
 const TelegramBot = require("node-telegram-bot-api");
+const BookingManager = require("./booking");
 require("dotenv").config();
 
 class CourtAvailabilityChecker {
   constructor() {
     this.apiUrl =
       "https://alquilatucancha.com/api/v3/availability/sportclubs/1003";
-    this.telegramBot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
+    this.telegramBot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
+      polling: true,
+    });
     this.chatId = process.env.TELEGRAM_CHAT_ID;
     this.startTime = process.env.START_TIME || "16:30";
     this.endTime = process.env.END_TIME || "20:00";
     this.intervalMinutes = parseInt(process.env.INTERVAL_MINUTES) || 1;
     this.shiftDays = parseInt(process.env.SHIFT_DAYS) || 0;
     this.notifiedSlots = new Set(); // Track already notified slots
+    this.availableSlots = []; // Store current available slots for booking
     this.intervalId = null;
     this.timezone = "America/Argentina/Buenos_Aires"; // GMT-3
     this.currentMonitoringDate = this.getTargetDate(); // Track current monitoring date
     this.lastNewDayCheck = this.getCurrentTimeInTimezone().toDateString(); // Track when we last checked for new day
+    this.bookingManager = new BookingManager();
+    this.setupTelegramCommands();
+  }
+
+  setupTelegramCommands() {
+    this.telegramBot.onText(/\/book (\d+)/, async (msg, match) => {
+      const slotIndex = parseInt(match[1]) - 1;
+      await this.handleBookingRequest(msg.chat.id, slotIndex);
+    });
+
+    this.telegramBot.onText(/\/slots/, async (msg) => {
+      await this.handleSlotsRequest(msg.chat.id);
+    });
+
+    this.telegramBot.on("callback_query", async (query) => {
+      if (query.data.startsWith("book_")) {
+        const slotIndex = parseInt(query.data.split("_")[1]);
+        await this.handleBookingRequest(query.message.chat.id, slotIndex);
+        await this.telegramBot.answerCallbackQuery(query.id);
+      }
+    });
+  }
+
+  async handleSlotsRequest(chatId) {
+    if (this.availableSlots.length === 0) {
+      await this.telegramBot.sendMessage(
+        chatId,
+        "No hay turnos disponibles en este momento."
+      );
+      return;
+    }
+
+    let message = "🎾 Turnos disponibles:\n\n";
+    this.availableSlots.forEach((slot, index) => {
+      const durationText = slot.duration ? `${slot.duration} min` : "90 min";
+      message += `${index + 1}. ${slot.dayDescription} (${slot.date}) ${
+        slot.time
+      }hs - ${slot.courtName} - ${slot.price} - ${durationText}\n`;
+    });
+    message += `\nUsa /book [número] para reservar (ej: /book 1)`;
+
+    await this.telegramBot.sendMessage(chatId, message);
+  }
+
+  async handleBookingRequest(chatId, slotIndex) {
+    if (slotIndex < 0 || slotIndex >= this.availableSlots.length) {
+      await this.telegramBot.sendMessage(
+        chatId,
+        "❌ Número de turno inválido. Usa /slots para ver los turnos disponibles."
+      );
+      return;
+    }
+
+    const slot = this.availableSlots[slotIndex];
+    const customerInfo = {
+      name: process.env.BOOKING_NAME,
+      email: process.env.BOOKING_EMAIL,
+      phone: process.env.BOOKING_PHONE,
+      sport_id: parseInt(process.env.BOOKING_SPORT_ID),
+    };
+
+    if (!customerInfo.name || !customerInfo.email || !customerInfo.phone) {
+      await this.telegramBot.sendMessage(
+        chatId,
+        "❌ Falta configurar BOOKING_NAME, BOOKING_EMAIL y BOOKING_PHONE en .env"
+      );
+      return;
+    }
+
+    await this.telegramBot.sendMessage(
+      chatId,
+      `⏳ Procesando reserva para:\n${slot.dayDescription} (${slot.date}) ${slot.time}hs - ${slot.courtName}...`
+    );
+
+    const result = await this.bookingManager.createBookingFromSlot(
+      slot,
+      customerInfo
+    );
+    const bookingData = {
+      datetime: `${slot.date} ${slot.time}`,
+      duration: slot.duration,
+      court_id: slot.courtId,
+      court_name: slot.courtName,
+      ...customerInfo,
+    };
+
+    const message = this.bookingManager.formatBookingMessage(
+      result,
+      bookingData
+    );
+    await this.telegramBot.sendMessage(chatId, message);
   }
 
   /**
@@ -172,7 +267,7 @@ class CourtAvailabilityChecker {
     }
 
     data.available_courts.forEach((court) => {
-      const courtName = court.name || `Court ${court.id}`;
+      const courtName = court.name || `Cancha ${court.id}`;
 
       if (!court.available_slots || !Array.isArray(court.available_slots)) {
         return;
@@ -192,7 +287,8 @@ class CourtAvailabilityChecker {
                 : "Price not available";
 
               availableSlots.push({
-                court: courtName,
+                courtId: court.id,
+                courtName: courtName,
                 time: timeOnly,
                 fullDateTime: startDateTime,
                 duration: slot.duration,
@@ -246,14 +342,15 @@ class CourtAvailabilityChecker {
    * Create a unique identifier for a slot
    */
   getSlotId(slot) {
-    return `${slot.date}-${slot.court}-${slot.time}`;
+    return `${slot.date}-${slot.courtId}-${slot.time}`;
   }
 
   /**
    * Format and send notifications for available slots
    */
   async sendNotifications(availableSlots, isFirstRun = false) {
-    // Filter out already notified slots (only for subsequent runs)
+    this.availableSlots = availableSlots;
+
     const newSlots = isFirstRun
       ? availableSlots
       : availableSlots.filter(
@@ -276,29 +373,93 @@ class CourtAvailabilityChecker {
       return;
     }
 
-    // Send individual messages for each new available slot
     for (const slot of newSlots) {
       const slotId = this.getSlotId(slot);
+      const slotIndex = availableSlots.indexOf(slot);
       const durationText = slot.duration
         ? `${slot.duration} minutos`
         : "90 minutos";
-      const message = `🎾 Turno disponible ${slot.dayDescription} (${slot.date}) a las ${slot.time}hs en ${slot.court}\n💰 Precio: ${slot.price}\n⏱️ Duración: ${durationText}`;
-      await this.sendTelegramMessage(message);
+      const message = `🎾 Turno disponible ${slot.dayDescription} (${slot.date}) a las ${slot.time}hs en ${slot.courtName}\n💰 Precio: ${slot.price}\n⏱️ Duración: ${durationText}`;
 
-      // Mark slot as notified
+      const shouldAutoBook = this.shouldAutoBook(slot);
+
+      if (shouldAutoBook) {
+        await this.telegramBot.sendMessage(this.chatId, message);
+        await this.telegramBot.sendMessage(
+          this.chatId,
+          "🤖 Auto-reservando miércoles 18:00..."
+        );
+        await this.autoBookSlot(slotIndex);
+      }
+
+      const keyboard = {
+        inline_keyboard: [
+          [
+            {
+              text: "📅 Reservar este turno",
+              callback_data: `book_${slotIndex}`,
+            },
+          ],
+        ],
+      };
+
+      await this.telegramBot.sendMessage(this.chatId, message, {
+        reply_markup: keyboard,
+      });
+
       this.notifiedSlots.add(slotId);
-
-      // Add small delay between messages to avoid rate limiting
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    // Clean up notified slots that are no longer available
     const currentSlotIds = new Set(
       availableSlots.map((slot) => this.getSlotId(slot))
     );
     this.notifiedSlots = new Set(
       [...this.notifiedSlots].filter((slotId) => currentSlotIds.has(slotId))
     );
+  }
+
+  shouldAutoBook(slot) {
+    const slotDate = new Date(slot.date + " " + slot.time);
+    const isWednesday = slotDate.getDay() === 3;
+    const isAt18 = slot.time === "18:00";
+    return isWednesday && isAt18;
+  }
+
+  async autoBookSlot(slotIndex) {
+    const slot = this.availableSlots[slotIndex];
+    const customerInfo = {
+      name: process.env.BOOKING_NAME,
+      email: process.env.BOOKING_EMAIL,
+      phone: process.env.BOOKING_PHONE,
+      sport_id: parseInt(process.env.BOOKING_SPORT_ID),
+    };
+
+    if (!customerInfo.name || !customerInfo.email || !customerInfo.phone) {
+      await this.telegramBot.sendMessage(
+        this.chatId,
+        "❌ Falta configurar BOOKING_NAME, BOOKING_EMAIL y BOOKING_PHONE en .env"
+      );
+      return;
+    }
+
+    const result = await this.bookingManager.createBookingFromSlot(
+      slot,
+      customerInfo
+    );
+    const bookingData = {
+      datetime: `${slot.date} ${slot.time}`,
+      duration: slot.duration,
+      court_id: slot.courtId,
+      court_name: slot.courtName,
+      ...customerInfo,
+    };
+
+    const message = this.bookingManager.formatBookingMessage(
+      result,
+      bookingData
+    );
+    await this.telegramBot.sendMessage(this.chatId, message);
   }
 
   /**
