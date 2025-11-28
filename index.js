@@ -545,11 +545,11 @@ ${
 ⏰ Checking every ${this.intervalMinutes} minute(s) between ${
       this.startTime
     } and ${this.endTime}
-    ${
-      this.isAutoBookingEnabled
-        ? `🤖 Auto-reserva activa para día ${this.autoBookingDay} a las ${this.autoBookingTime}`
-        : "🤖 Auto-reserva desactivada"
-    }
+${
+  this.isAutoBookingEnabled
+    ? `🤖 Auto-reserva activa para día ${this.autoBookingDay} a las ${this.autoBookingTime}`
+    : "🤖 Auto-reserva desactivada"
+}
 📅 Monitoring both:
 • ${this.currentMonitoringDate} (${this.getDayDescription(this.shiftDays)})
 • ${nextDate} (${this.getDayDescription(this.shiftDays + 1)})`;
