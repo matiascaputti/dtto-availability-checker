@@ -21,6 +21,10 @@ class CourtAvailabilityChecker {
     this.timezone = "America/Argentina/Buenos_Aires"; // GMT-3
     this.currentMonitoringDate = this.getTargetDate(); // Track current monitoring date
     this.lastNewDayCheck = this.getCurrentTimeInTimezone().toDateString(); // Track when we last checked for new day
+    this.isAutoBookingEnabled =
+      process.env.AUTO_BOOKING_ENABLED === "true" &&
+      process.env.AUTO_BOOKING_DAY &&
+      process.env.AUTO_BOOKING_TIME;
     this.bookingManager = new BookingManager();
     this.setupTelegramCommands();
   }
@@ -387,7 +391,7 @@ class CourtAvailabilityChecker {
         await this.telegramBot.sendMessage(this.chatId, message);
         await this.telegramBot.sendMessage(
           this.chatId,
-          "🤖 Auto-reservando miércoles 18:00..."
+          `🤖 Auto-reservando para día ${process.env.AUTO_BOOKING_DAY} a las ${process.env.AUTO_BOOKING_TIME}`
         );
         await this.autoBookSlot(slotIndex);
       }
@@ -420,10 +424,14 @@ class CourtAvailabilityChecker {
   }
 
   shouldAutoBook(slot) {
+    if (!process.env.AUTO_BOOKING_DAY || !process.env.AUTO_BOOKING_TIME) {
+      return false;
+    }
+
     const slotDate = new Date(slot.date + " " + slot.time);
-    const isWednesday = slotDate.getDay() === 3;
-    const isAt18 = slot.time === "18:00";
-    return isWednesday && isAt18;
+    const isAutoBookingDay = slotDate.getDay() === process.env.AUTO_BOOKING_DAY;
+    const isAutoBookingTime = slot.time === process.env.AUTO_BOOKING_TIME;
+    return isAutoBookingDay && isAutoBookingTime;
   }
 
   async autoBookSlot(slotIndex) {
@@ -528,6 +536,11 @@ class CourtAvailabilityChecker {
 ⏰ Checking every ${this.intervalMinutes} minute(s) between ${
       this.startTime
     } and ${this.endTime}
+    ${
+      this.isAutoBookingEnabled
+        ? `🤖 Auto-reservando activo para día ${process.env.AUTO_BOOKING_DAY} a las ${process.env.AUTO_BOOKING_TIME}`
+        : ""
+    }
 📅 Monitoring both:
 • ${this.currentMonitoringDate} (${this.getDayDescription(this.shiftDays)})
 • ${nextDate} (${this.getDayDescription(this.shiftDays + 1)})`;
