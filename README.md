@@ -9,6 +9,7 @@ A Node.js application that continuously monitors court availability on AlquilaTu
 - ⏰ Filters slots between 16:30 and 20:00 (configurable)
 - 📱 Sends Telegram notifications for each available slot
 - 📅 One-click booking directly from Telegram notifications
+- 🤖 **Auto-booking**: Automatically books slots matching your preferred day and time
 - 🤖 Telegram bot commands (`/slots`, `/book`)
 - 🔄 Checks every minute (configurable interval)
 - 🚫 Prevents duplicate notifications for same slots
@@ -68,13 +69,44 @@ BOOKING_NAME=Your Name
 BOOKING_EMAIL=your.email@example.com
 BOOKING_PHONE=+542211234567
 BOOKING_SPORT_ID=7  # Optional, defaults to 7
+
+# Auto-booking configuration (optional)
+AUTO_BOOKING_ENABLED=true  # Set to true to enable auto-booking
+AUTO_BOOKING_DAY=3  # Day of week (0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday)
+AUTO_BOOKING_TIME=18:00  # Time in HH:MM format (24-hour)
 ```
 
 ## Booking
 
+### Manual Booking
+
 Click the "📅 Reservar este turno" button on notifications, or use:
 - `/slots` - View available slots
 - `/book [number]` - Book a slot (e.g., `/book 1`)
+
+### Auto-Booking
+
+The application can automatically book slots that match your preferred day and time. This is useful if you always want to book the same time slot (e.g., every Wednesday at 18:00).
+
+**How it works:**
+- When a slot becomes available that matches your configured `AUTO_BOOKING_DAY` and `AUTO_BOOKING_TIME`, the app will automatically attempt to book it
+- You'll receive a notification when auto-booking is triggered
+- The booking will be processed using your configured `BOOKING_NAME`, `BOOKING_EMAIL`, and `BOOKING_PHONE`
+
+**Configuration:**
+- Set `AUTO_BOOKING_ENABLED=true` to enable auto-booking
+- Set `AUTO_BOOKING_DAY` to the day of the week (0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday)
+- Set `AUTO_BOOKING_TIME` to your preferred time in 24-hour format (e.g., `18:00` for 6:00 PM)
+
+**Example:**
+To automatically book any available slot on Wednesdays at 6:00 PM:
+```bash
+AUTO_BOOKING_ENABLED=true
+AUTO_BOOKING_DAY=3
+AUTO_BOOKING_TIME=18:00
+```
+
+**Note:** Auto-booking requires the booking configuration variables (`BOOKING_NAME`, `BOOKING_EMAIL`, `BOOKING_PHONE`) to be set. The app will notify you if these are missing when auto-booking is attempted.
 
 ## Usage
 
