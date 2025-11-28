@@ -21,10 +21,14 @@ class CourtAvailabilityChecker {
     this.timezone = "America/Argentina/Buenos_Aires"; // GMT-3
     this.currentMonitoringDate = this.getTargetDate(); // Track current monitoring date
     this.lastNewDayCheck = this.getCurrentTimeInTimezone().toDateString(); // Track when we last checked for new day
+
+    // Auto-booking configuration
+    this.autoBookingDay = process.env.AUTO_BOOKING_DAY;
+    this.autoBookingTime = process.env.AUTO_BOOKING_TIME;
     this.isAutoBookingEnabled =
       process.env.AUTO_BOOKING_ENABLED === "true" &&
-      process.env.AUTO_BOOKING_DAY &&
-      process.env.AUTO_BOOKING_TIME;
+      this.autoBookingDay &&
+      this.autoBookingTime;
     this.bookingManager = new BookingManager();
     this.setupTelegramCommands();
   }
@@ -391,7 +395,7 @@ class CourtAvailabilityChecker {
         await this.telegramBot.sendMessage(this.chatId, message);
         await this.telegramBot.sendMessage(
           this.chatId,
-          `🤖 Auto-reservando para día ${process.env.AUTO_BOOKING_DAY} a las ${process.env.AUTO_BOOKING_TIME}`
+          `🤖 Auto-reservando para día ${this.autoBookingDay} a las ${this.autoBookingTime}`
         );
         await this.autoBookSlot(slotIndex);
       }
@@ -424,13 +428,13 @@ class CourtAvailabilityChecker {
   }
 
   shouldAutoBook(slot) {
-    if (!process.env.AUTO_BOOKING_DAY || !process.env.AUTO_BOOKING_TIME) {
+    if (!this.autoBookingDay || !this.autoBookingTime) {
       return false;
     }
 
     const slotDate = new Date(slot.date + " " + slot.time);
-    const isAutoBookingDay = slotDate.getDay() === process.env.AUTO_BOOKING_DAY;
-    const isAutoBookingTime = slot.time === process.env.AUTO_BOOKING_TIME;
+    const isAutoBookingDay = slotDate.getDay() === this.autoBookingDay;
+    const isAutoBookingTime = slot.time === this.autoBookingTime;
     return isAutoBookingDay && isAutoBookingTime;
   }
 
@@ -517,6 +521,11 @@ class CourtAvailabilityChecker {
 📅 Monitoring: ${this.currentMonitoringDate} (${this.getDayDescription(
       this.shiftDays
     )}) + ${nextDate} (${this.getDayDescription(this.shiftDays + 1)})
+${
+  this.isAutoBookingEnabled
+    ? `🤖 Auto-booking enabled for day ${this.autoBookingDay} at ${this.autoBookingTime}`
+    : "🤖 Auto-booking disabled"
+}
 ⏰ Time: ${this.startTime}-${this.endTime} | Check every ${
       this.intervalMinutes
     }min`;
@@ -538,8 +547,8 @@ class CourtAvailabilityChecker {
     } and ${this.endTime}
     ${
       this.isAutoBookingEnabled
-        ? `🤖 Auto-reservando activo para día ${process.env.AUTO_BOOKING_DAY} a las ${process.env.AUTO_BOOKING_TIME}`
-        : ""
+        ? `🤖 Auto-reserva activa para día ${this.autoBookingDay} a las ${this.autoBookingTime}`
+        : "🤖 Auto-reserva desactivada"
     }
 📅 Monitoring both:
 • ${this.currentMonitoringDate} (${this.getDayDescription(this.shiftDays)})
